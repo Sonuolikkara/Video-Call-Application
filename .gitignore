@@ -1,0 +1,10 @@
+# Local Firebase configuration
+wwwroot/js/firebase-config.js
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# ASP.NET Core local settings
+appsettings.Development.json

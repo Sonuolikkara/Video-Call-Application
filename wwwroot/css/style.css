@@ -1,0 +1,256 @@
+
+:root {
+    font-family: "Segoe UI", Arial, sans-serif;
+    color: #f5f5f5;
+    background: #181818;
+    --panel: #242424;
+    --border: #3b3b3b;
+    --muted: #b8b8b8;
+    --accent: #6264a7;
+    --danger: #c4314b;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    min-height: 100vh;
+    margin: 0;
+    background: #181818;
+}
+
+/* Meeting header */
+
+.meeting-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    background: #202020;
+}
+
+h1 {
+    margin: 0;
+    font-size: 1.4rem;
+}
+
+#callStatus {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+/* Meeting information */
+
+main {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px;
+}
+
+.meeting-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+h2 {
+    margin: 0 0 12px;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.meeting-info h2 {
+    margin: 0;
+}
+
+#participantCount {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.95rem;
+}
+
+/* Participant video grid */
+
+.videos {
+    display: grid;
+    grid-template-columns: repeat( auto-fit, minmax(min(100%, 300px), 1fr) );
+    gap: 16px;
+    align-items: stretch;
+}
+
+.video-tile {
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+}
+
+    .video-tile h3 {
+        margin: 0 0 10px;
+        color: #f5f5f5;
+        font-size: 0.9rem;
+        font-weight: 500;
+    }
+
+video {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    border-radius: 8px;
+    background: #080808;
+}
+
+/* Setup and meeting controls */
+
+.meeting-setup,
+.meeting-controls {
+    margin-top: 24px;
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #202020;
+}
+
+button,
+input {
+    min-height: 42px;
+    margin: 4px;
+    padding: 0 14px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    font: inherit;
+}
+
+button {
+    color: white;
+    background: #3a3a3a;
+    cursor: pointer;
+    transition: background 160ms ease;
+}
+
+    button:hover:not(:disabled) {
+        background: #4a4a4a;
+    }
+
+    button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+    }
+
+/* Primary buttons */
+
+#webcamButton,
+#callButton,
+#answerButton {
+    border-color: transparent;
+    background: var(--accent);
+}
+
+    #webcamButton:hover:not(:disabled),
+    #callButton:hover:not(:disabled),
+    #answerButton:hover:not(:disabled) {
+        background: #7779bd;
+    }
+
+/* Leave meeting button */
+
+#hangupButton {
+    background: var(--danger);
+    border-color: transparent;
+}
+
+    #hangupButton:hover:not(:disabled) {
+        background: #a9263d;
+    }
+
+/* Call ID input */
+
+input {
+    width: min(320px, 100%);
+    color: white;
+    background: #181818;
+    outline: none;
+}
+
+    input:focus {
+        border-color: #8b8dc7;
+    }
+
+    input::placeholder {
+        color: #a0a0a0;
+    }
+
+.join-controls {
+    margin-top: 10px;
+}
+
+/* Join and leave notifications */
+
+#notification {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 10;
+    max-width: min(360px, calc(100vw - 32px));
+    padding: 12px 16px;
+    border: 1px solid #555;
+    border-radius: 8px;
+    color: white;
+    background: #292929;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(8px);
+    transition: opacity 180ms ease, transform 180ms ease;
+}
+
+    #notification.show {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+/* Responsive layout */
+
+@media (max-width: 650px) {
+    .meeting-header {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 16px;
+    }
+
+    main {
+        padding: 16px;
+    }
+
+    .meeting-info {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .meeting-setup,
+    .meeting-controls {
+        padding: 14px;
+    }
+
+    button {
+        margin: 4px 2px;
+    }
+}
+
+/* Respect reduced-motion preferences */
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition: none !important;
+    }
+}

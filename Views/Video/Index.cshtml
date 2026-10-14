@@ -1,0 +1,87 @@
+﻿@{
+    Layout = null;
+    ViewData["Title"] = "Video Call";
+}
+
+<link rel="stylesheet"
+      href="~/css/style.css"
+      asp-append-version="true" />
+
+<header class="meeting-header">
+    <h1>Video Call Application</h1>
+
+    <p id="callStatus" role="status" aria-live="polite">
+        Not connected
+    </p>
+</header>
+
+<main>
+    <!-- Participant Count -->
+    <section class="meeting-info">
+        <h2>Meeting room</h2>
+        <p id="participantCount">Participants (1)</p>
+    </section>
+
+   <!-- User Screen -->
+    <section class="videos" id="videoGrid">
+        <div class="video-tile" id="localTile">
+            <h3>You</h3>
+            <video id="webcamVideo"
+                   autoplay
+                   playsinline
+                   muted></video>
+        </div>
+    </section>
+
+    <section class="meeting-setup">
+        <h2>Join or create a meeting</h2>
+
+        <!-- Start WebCam -->
+        <button id="webcamButton">Start Webcam</button>
+
+        <!-- Create a Call-->
+        <button id="callButton" disabled>
+            Create Call
+        </button>
+
+        <!-- Join Meeting -->
+        <div class="join-controls">
+            <input id="callInput"
+                   placeholder="Enter call ID" />
+
+            <button id="answerButton" disabled>
+                Join Meeting
+            </button>
+        </div>
+    </section>
+
+    <section class="meeting-controls">
+        <h2>Meeting controls</h2>
+
+        <!-- Micrphone-->
+        <button id="micButton" disabled>
+            Mute Microphone
+        </button>
+
+        <!-- Camera-->
+        <button id="cameraButton" disabled>
+            Turn Camera Off
+        </button>
+
+        <!--Leave Meeting-->
+        <button id="hangupButton" disabled>
+            Leave Meeting
+        </button>
+    </section>
+
+    <div id="notification"
+         role="status"
+         aria-live="polite"></div>
+</main>
+
+<script src="https://www.gstatic.com/firebasejs/8.2.10/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.2.10/firebase-firestore.js"></script>
+
+<script src="~/js/firebase-config.js" asp-append-version="true"></script>
+<script src="~/js/main.js" asp-append-version="true"></script>
+

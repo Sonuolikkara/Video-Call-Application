@@ -17,16 +17,15 @@ const participantCount = document.getElementById("participantCount");
 //Camera and Microphone tracks variable
 let localStream = null;
 
-let roomRef = null; //Holds the Firestore room document reference
+let currentRoomId = null; //Holds the Firestore room document reference
 let myParticipantId = null; //Holds the participant ID for the current user
-let participantsUnsubscribe = null; //let us stop listening to participant changes when we leave the call
 let isInMeeting = false;//Tracks if the user is in a meeting or not
 
 //WebRTC Tracks variable
 const peerConnections = {}; //Holds the RTCPeerConnection objects for each participant
 const remoteTiles = {}; //Holds the video elements for each remote participant
-const connectionListeners = {}; //Holds the event listeners for each RTCPeerConnection
 const pendingCandidates = {};//Holds the ICE candidates that are received before the remote description is set
+const activeParticipantIds = new Set();//Holds the Paricipant Counts
 
 //UI HELPERS
 
@@ -104,6 +103,7 @@ function toggleMicrophone() {
     });
 
     const enabled = tracks.some(track => track.enabled);
+
     micButton.textContent = enabled
         ? "Mute Microphone"
         : "Unmute Microphone";
@@ -243,24 +243,12 @@ function closePeerConnection(remoteId) {
         delete peerConnections[remoteId];
     }
 
-    // Stop listeners belonging to this participant
-    [remoteId, `${remoteId}-document`].forEach(key => {
-        if (connectionListeners[key]) {
-            connectionListeners[key]();
-            delete connectionListeners[key];
-        }
-    });
-
     delete pendingCandidates[remoteId];
     removeRemoteTile(remoteId);
 }
 
 //FIRESTORE SIGNALING
 
-// Both participants calculate the same document ID
-function getPairId(firstId, secondId) {
-    return [firstId, secondId].sort().join("_");
-}
 
 async function addPendingCandidates(remoteId, pc) {
     const candidates = pendingCandidates[remoteId] || [];
@@ -276,10 +264,160 @@ async function addPendingCandidates(remoteId, pc) {
     }
 }
 
+//SignalR WebRTC Signaling Event Handlers
+
+// Receive an offer from another participant
+signalRConnection.on("ReceiveOffer", async (remoteId, offer) => {
+    try {
+        const pc = createPeerConnection(remoteId);
+
+        await pc.setRemoteDescription(
+            new RTCSessionDescription(offer)
+        );
+
+        // Apply ICE candidates received before the offer
+        await addPendingCandidates(remoteId, pc);
+
+        const answer = await pc.createAnswer();
+
+        await pc.setLocalDescription(answer);
+
+        await signalRConnection.invoke(
+            "SendAnswer",
+            remoteId,
+            {
+                type: answer.type,
+                sdp: answer.sdp
+            }
+        );
+
+        console.log("Answer sent to:", remoteId);
+    } catch (error) {
+        console.error("Could not process offer:", error);
+        setStatus("Could not process the incoming call.");
+    }
+});
+
+// Receive an answer to an offer I sent
+signalRConnection.on("ReceiveAnswer", async (remoteId, answer) => {
+    try {
+        const pc = peerConnections[remoteId];
+
+        if (!pc) {
+            console.warn("Peer connection not found:", remoteId);
+            return;
+        }
+
+        await pc.setRemoteDescription(
+            new RTCSessionDescription(answer)
+        );
+
+        await addPendingCandidates(remoteId, pc);
+
+        console.log("Answer received from:", remoteId);
+    } catch (error) {
+        console.error("Could not process answer:", error);
+    }
+});
+
+// Receive an ICE candidate from another participant
+signalRConnection.on(
+    "ReceiveIceCandidate",
+    async (remoteId, candidateData) => {
+        try {
+            const pc = peerConnections[remoteId];
+
+            if (!pc) {
+                console.warn(
+                    "Peer connection not found for ICE candidate:",
+                    remoteId
+                );
+                return;
+            }
+
+            const candidate = new RTCIceCandidate(candidateData);
+
+            if (pc.remoteDescription) {
+                await pc.addIceCandidate(candidate);
+            } else {
+                pendingCandidates[remoteId] ??= [];
+                pendingCandidates[remoteId].push(candidate);
+            }
+        } catch (error) {
+            console.error("Could not process ICE candidate:", error);
+        }
+    }
+);
+
+
+// Participants who were already in the room
+let pendingParticipants = [];
+signalRConnection.on("ExistingParticipants", participantIds => {
+    console.log("Existing participants:", participantIds);
+
+
+    // Buffer participants until our meeting identity is ready.
+    if (!myParticipantId || !isInMeeting) {
+        pendingParticipants.push(...participantIds);
+        return;
+    }
+
+    participantIds.forEach((remoteId) => {
+        if (remoteId !== myParticipantId) {
+            activeParticipantIds.add(remoteId);
+        }
+
+        connectToParticipant(remoteId).catch((error) => {
+            console.error("Could not connect to participant:", error);
+        });
+    });
+
+    updateParticipantCount(activeParticipantIds.size);
+});
+
+// A new participant joined the room
+signalRConnection.on("ParticipantJoined", remoteId => {
+    console.log("Participant joined:", remoteId);
+
+    // The meeting identity might not be initialized yet.
+    if (!myParticipantId || !isInMeeting) {
+        pendingParticipants.push(remoteId);
+        return;
+    }
+
+    if (remoteId !== myParticipantId) {
+        activeParticipantIds.add(remoteId);
+    }
+
+    updateParticipantCount(activeParticipantIds.size);
+
+    connectToParticipant(remoteId).catch(error => {
+        console.error(
+            "Could not connect to new participant:",
+            remoteId,
+            error
+        );
+    });
+});
+
+// A participant left the room
+signalRConnection.on("ParticipantLeft", remoteId => {
+    console.log("Participant left:", remoteId);
+
+    activeParticipantIds.delete(remoteId);
+
+    closePeerConnection(remoteId);
+
+    updateParticipantCount(
+        activeParticipantIds.size
+    );
+
+    showNotification("A participant left the meeting.");
+});
+
 //Connect to a remote participant and set up signaling
 async function connectToParticipant(remoteId) {
     if (
-        !roomRef ||
         !myParticipantId ||
         remoteId === myParticipantId ||
         peerConnections[remoteId]
@@ -287,131 +425,60 @@ async function connectToParticipant(remoteId) {
         return;
     }
 
-    const pc = createPeerConnection(remoteId);
-    const pairId = getPairId(myParticipantId, remoteId);
+    try {
+        const pc = createPeerConnection(remoteId);
 
-    const connectionRef = roomRef
-        .collection("connections")
-        .doc(pairId);
+        // Decide which participant creates the offer
+        // Both participants calculate the same result
+        const isOfferer = myParticipantId < remoteId;
 
-    // The same participant always creates the offer for this pair
-    const isOfferer = myParticipantId < remoteId;
-
-    const mySide = isOfferer ? "caller" : "callee";
-    const otherSide = isOfferer ? "callee" : "caller";
-
-    const myCandidates = connectionRef.collection(
-        `${mySide}Candidates`
-    );
-
-    const otherCandidates = connectionRef.collection(
-        `${otherSide}Candidates`
-    );
-
-    // Publish my ICE candidates
-    pc.onicecandidate = async event => {
-        if (!event.candidate) {
-            return;
-        }
-
-        try {
-            await myCandidates.add(event.candidate.toJSON());
-        } catch (error) {
-            console.error("Could not save ICE candidate:", error);
-        }
-    };
-
-    // Receive ICE candidates from the other participant
-    connectionListeners[remoteId] = otherCandidates.onSnapshot(
-        snapshot => {
-            snapshot.docChanges().forEach(change => {
-                if (change.type !== "added") {
-                    return;
-                }
-
-                const candidate = new RTCIceCandidate(
-                    change.doc.data()
-                );
-
-                if (pc.remoteDescription) {
-                    pc.addIceCandidate(candidate).catch(error => {
-                        console.error("Could not add ICE candidate:", error);
-                    });
-                } else {
-                    pendingCandidates[remoteId].push(candidate);
-                }
-            });
-        },
-        error => {
-            console.error("ICE listener failed:", error);
-        }
-    );
-
-    // Exchange offers and answers through this pair's document
-    connectionListeners[`${remoteId}-document`] =
-        connectionRef.onSnapshot(async snapshot => {
-            const data = snapshot.data();
-
-            if (!data) {
+        // Send local ICE candidates through SignalR
+        pc.onicecandidate = async event => {
+            if (!event.candidate) {
                 return;
             }
 
             try {
-                if (
-                    isOfferer &&
-                    data.answer &&
-                    !pc.currentRemoteDescription
-                ) {
-                    await pc.setRemoteDescription(
-                        new RTCSessionDescription(data.answer)
-                    );
-
-                    await addPendingCandidates(remoteId, pc);
-                    setStatus("Answer received. Connecting...");
-                }
-
-                if (
-                    !isOfferer &&
-                    data.offer &&
-                    !pc.currentRemoteDescription
-                ) {
-                    await pc.setRemoteDescription(
-                        new RTCSessionDescription(data.offer)
-                    );
-
-                    await addPendingCandidates(remoteId, pc);
-
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-
-                    await connectionRef.update({
-                        answer: {
-                            type: answer.type,
-                            sdp: answer.sdp
-                        }
-                    });
-                }
+                await signalRConnection.invoke(
+                    "SendIceCandidate",
+                    remoteId,
+                    event.candidate.toJSON()
+                );
             } catch (error) {
-                console.error("Offer/answer exchange failed:", error);
-                setStatus("Could not establish a participant connection.");
+                console.error(
+                    "Could not send ICE candidate:",
+                    error
+                );
             }
-        });
+        };
 
-    // Only the designated offerer creates the offer
-    if (isOfferer) {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
+        // Only one participant creates the offer
+        if (isOfferer) {
+            const offer = await pc.createOffer();
 
-        await connectionRef.set({
-            participants: [myParticipantId, remoteId].sort(),
-            offer: {
-                type: offer.type,
-                sdp: offer.sdp
-            }
-        }, { merge: true });
+            await pc.setLocalDescription(offer);
+
+            await signalRConnection.invoke(
+                "SendOffer",
+                remoteId,
+                {
+                    type: offer.type,
+                    sdp: offer.sdp
+                }
+            );
+
+            console.log("Offer sent to:", remoteId);
+        }
+
+        console.log("Signaling initialized for:", remoteId);
+    } catch (error) {
+        console.error(
+            "Could not initialize participant signaling:",
+            error
+        );
+
+        setStatus("Could not connect to participant.");
     }
-
-    console.log("Signaling initialized for:", remoteId);
 }
 
 // Join Room
@@ -426,103 +493,69 @@ async function joinRoom(callId, createNewRoom = false) {
         return;
     }
 
-    const requestedId = callId.trim();
-
-    if (!requestedId) {
-        setStatus("Enter a call ID.");
+    if (
+        signalRConnection.state !==
+        signalR.HubConnectionState.Connected
+    ) {
+        setStatus("Connecting to the meeting server. Please wait.");
         return;
     }
 
     try {
-        const requestedRoom = db.collection("calls").doc(requestedId);
-
         if (createNewRoom) {
-            await requestedRoom.set({
-                createdAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
+            currentRoomId =
+                await signalRConnection.invoke("CreateRoom");
         } else {
-            const snapshot = await requestedRoom.get();
+            currentRoomId = callId.trim();
 
-            if (!snapshot.exists) {
-                setStatus("Call not found. Check the call ID");
+            if (!currentRoomId) {
+                setStatus("Enter a call ID.");
                 return;
             }
+
+            await signalRConnection.invoke(
+                "JoinRoom",
+                currentRoomId
+            );
         }
 
-        roomRef = requestedRoom;
+        myParticipantId = signalRConnection.connectionId;
+        isInMeeting = true;
+        activeParticipantIds.clear();
+        activeParticipantIds.add(myParticipantId);
 
-        // Generate a unique participant ID for this meeting
-        const participantRef = roomRef
-            .collection("participants")
-            .doc();
+        updateParticipantCount(activeParticipantIds.size);
 
-        myParticipantId = participantRef.id;
+        const participantsToConnect = [...new Set(pendingParticipants)];
+        pendingParticipants = [];
 
-        await participantRef.set({
-            joinedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            active: true
+        participantsToConnect.forEach((remoteId) => {
+            if (remoteId !== myParticipantId) {
+                activeParticipantIds.add(remoteId);
+            }
+
+            connectToParticipant(remoteId).catch((error) => {
+                console.error("Could not connect to participant:", error);
+            });
         });
 
-        isInMeeting = true;
+        updateParticipantCount(activeParticipantIds.size);
 
-        callInput.value = requestedId;
+        callInput.value = currentRoomId;
         callButton.disabled = true;
         answerButton.disabled = true;
         hangupButton.disabled = false;
-
-        setStatus("Joining meeting...");
-
-        // Discover existing participants and future arrivals
-        participantsUnsubscribe = roomRef
-            .collection("participants")
-            .onSnapshot(snapshot => {
-                const activeIds = new Set();
-
-                snapshot.forEach(document => {
-                    const participant = document.data();
-
-                    if (participant.active === false) {
-                        return;
-                    }
-
-                    const remoteId = document.id;
-                    activeIds.add(remoteId);
-
-                    if (remoteId !== myParticipantId) {
-                        connectToParticipant(remoteId).catch(error => {
-                            console.error(
-                                "Could not connect to participant:",
-                                remoteId,
-                                error
-                            );
-                        });
-                    }
-                });
-
-                updateParticipantCount(activeIds.size);
-
-                // Clean up connections for participants who have left
-                Object.keys(peerConnections).forEach(remoteId => {
-                    if (!activeIds.has(remoteId)) {
-                        closePeerConnection(remoteId);
-
-
-                        showNotification("A participant left the meeting");
-                        console.log("Participant left:", remoteId);
-                    }
-                });
-            }, error => {
-                console.error("Participant listener failed:", error);
-                setStatus("Could not monitor meeting participants");
-            });
 
         setStatus("Meeting joined. Waiting for participants...");
         showNotification("Joined meeting successfully");
     } catch (error) {
         console.error("Could not join meeting:", error);
-        setStatus("Unable to join meeting. Check the console");
 
-        await leaveMeeting();
+        currentRoomId = null;
+        myParticipantId = null;
+        isInMeeting = false;
+
+        setStatus("Unable to join meeting. Check the call ID.");
     }
 }
 
@@ -538,14 +571,7 @@ async function startCall() {
         return;
     }
 
-    try {
-        const newRoom = db.collection("calls").doc();
-
-        await joinRoom(newRoom.id, true);
-    } catch (error) {
-        console.error("Could not create meeting:", error);
-        setStatus("Unable to create meeting.");
-    }
+    await joinRoom("", true);
 }
 
 //Join a Call
@@ -566,41 +592,37 @@ answerButton.addEventListener("click", joinCall);
 
 // Leave a Call and Clean Up Function
 async function leaveMeeting() {
-    // Stop listening for participant changes
-    if (participantsUnsubscribe) {
-        participantsUnsubscribe();
-        participantsUnsubscribe = null;
+    const roomId = currentRoomId;
+
+    // Tell the SignalR server that we are leaving the room
+    try {
+        if (
+            roomId &&
+            signalRConnection.state === signalR.HubConnectionState.Connected
+        ) {
+            await signalRConnection.invoke("LeaveRoom", roomId);
+        }
+    } catch (error) {
+        console.error("Could not leave SignalR room:", error);
     }
 
-    // Close every peer connection and its signaling listeners
-    Object.keys(peerConnections).forEach(remoteId => {
+    // Close all peer connections
+    Object.keys(peerConnections).forEach((remoteId) => {
         closePeerConnection(remoteId);
     });
 
-    // Stop any remaining Firestore listeners
-    Object.keys(connectionListeners).forEach(key => {
-        connectionListeners[key]();
-        delete connectionListeners[key];
-    });
-
-    // Remove this participant from the room
-    if (roomRef && myParticipantId) {
-        try {
-            await roomRef
-                .collection("participants")
-                .doc(myParticipantId)
-                .delete();
-        } catch (error) {
-            console.error("Could not remove participant:", error);
-        }
-    }
-
-    roomRef = null;
+    // Reset meeting state.
+    currentRoomId = null;
     myParticipantId = null;
     isInMeeting = false;
+    pendingParticipants = [];
+    activeParticipantIds.clear();
 
     updateParticipantCount(0);
+
+    console.log("Left the meeting.");
 }
+
 
 //Hang Up Function
 async function hangUp() {
@@ -634,6 +656,7 @@ hangupButton.addEventListener("click", hangUp);
 callButton.disabled = true;
 answerButton.disabled = true;
 micButton.disabled = true;
+
 cameraButton.disabled = true;
 hangupButton.disabled = true;
 
